@@ -1,0 +1,18 @@
+# Node / React / Expo
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+
+# Backend NestJS
+dist/
+
+# Env & secrets
+.env
+.env.local
+google-services.json
+
+# OS / éditeurs
+.DS_Store
+.vscode/
