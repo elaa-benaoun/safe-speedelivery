@@ -82,15 +82,26 @@ WHERE d.statut IN ('urgent', 'a_verifier')
 ORDER BY d.date_signalement DESC;
 
 -- 8) Classement des points de distribution les plus visités
+-- (mis à jour : passe par mission_stops pour compter chaque arrêt d'une tournée multi-destinations)
 SELECT
     dp.nom,
-    COUNT(m.id) AS nb_livraisons
+    COUNT(ms.id) AS nb_livraisons
 FROM distribution_points dp
-JOIN missions m ON m.distribution_point_id = dp.id
+JOIN mission_stops ms ON ms.distribution_point_id = dp.id
+JOIN missions m        ON m.id = ms.mission_id
 WHERE m.statut = 'livre'
 GROUP BY dp.id, dp.nom
 ORDER BY nb_livraisons DESC
 LIMIT 10;
+
+-- 8bis) Détail des arrêts d'une mission donnée, dans l'ordre de passage (:mission_id)
+SELECT
+    ms.ordre_passage,
+    dp.nom AS point_de_distribution
+FROM mission_stops ms
+JOIN distribution_points dp ON dp.id = ms.distribution_point_id
+WHERE ms.mission_id = :mission_id
+ORDER BY ms.ordre_passage;
 
 -- 9) Évaluation moyenne par chauffeur
 SELECT
@@ -124,3 +135,29 @@ FROM missions m
 WHERE m.pm_id = :pm_id
   AND date_trunc('month', m.date_creation) = :mois::date
   AND m.statut NOT IN ('livre', 'annule');
+
+-- 12) Solde de carte carburant restant après le dernier plein d'un véhicule (:vehicle_id)
+SELECT vehicle_id, date, solde
+FROM fuel_logs
+WHERE vehicle_id = :vehicle_id
+ORDER BY date DESC
+LIMIT 1;
+
+-- ============================================================
+-- EN ATTENTE DE VALIDATION CLIENT — Prime journalière chauffeur
+-- Ne pas exposer ces requêtes dans l'application tant que la fonctionnalité
+-- n'est pas confirmée par le client.
+-- ============================================================
+
+-- 13) Calculer la prime du jour pour un chauffeur selon le barème (:chauffeur_id, :date, :nb_missions)
+SELECT montant
+FROM bonus_rules
+WHERE :nb_missions >= nb_missions_min
+  AND (nb_missions_max IS NULL OR :nb_missions <= nb_missions_max)
+LIMIT 1;
+
+-- 14) Enregistrer la prime calculée pour un chauffeur et une date donnés
+INSERT INTO driver_daily_bonus (chauffeur_id, date, nb_missions, montant)
+VALUES (:chauffeur_id, :date, :nb_missions, :montant)
+ON CONFLICT (chauffeur_id, date)
+DO UPDATE SET nb_missions = EXCLUDED.nb_missions, montant = EXCLUDED.montant;

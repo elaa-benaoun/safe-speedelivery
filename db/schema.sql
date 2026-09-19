@@ -57,12 +57,16 @@ CREATE TABLE distribution_points (
 );
 
 -- ---------- Missions / ordres de mission ----------
+-- NOTE (mise à jour) : un ordre de mission (OM) peut couvrir PLUSIEURS arrêts/destinations
+-- dans la même tournée (constaté sur les données réelles fournies par le client, fichier
+-- IVECO193.xlsx : ex. un seul OM avec 2 destinations séparées par une virgule).
+-- Le trajet global (départ -> dernier arrêt) reste sur la mission ; le détail des arrêts
+-- intermédiaires est porté par la table mission_stops ci-dessous.
 CREATE TABLE missions (
     id                      SERIAL PRIMARY KEY,
     chauffeur_id            INTEGER NOT NULL REFERENCES users(id),
     vehicle_id              INTEGER NOT NULL REFERENCES vehicles(id),
     pm_id                   INTEGER NOT NULL REFERENCES users(id), -- PM qui a créé la mission
-    distribution_point_id   INTEGER REFERENCES distribution_points(id),
     trajet_depart           VARCHAR(150) NOT NULL,
     trajet_arrivee          VARCHAR(150) NOT NULL,
     marchandise             VARCHAR(255),
@@ -75,6 +79,18 @@ CREATE INDEX idx_missions_chauffeur ON missions(chauffeur_id);
 CREATE INDEX idx_missions_pm        ON missions(pm_id);
 CREATE INDEX idx_missions_statut    ON missions(statut);
 CREATE INDEX idx_missions_date      ON missions(date_creation);
+
+-- ---------- Arrêts d'une mission (support des tournées multi-destinations) ----------
+CREATE TABLE mission_stops (
+    id                      SERIAL PRIMARY KEY,
+    mission_id              INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    distribution_point_id   INTEGER NOT NULL REFERENCES distribution_points(id),
+    ordre_passage           INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (mission_id, ordre_passage)
+);
+
+CREATE INDEX idx_mission_stops_mission ON mission_stops(mission_id);
+CREATE INDEX idx_mission_stops_point   ON mission_stops(distribution_point_id);
 
 -- ---------- Historique de statut (traçabilité, type journal d'audit) ----------
 CREATE TABLE mission_status_history (
@@ -100,13 +116,17 @@ CREATE TABLE maintenance (
 CREATE INDEX idx_maintenance_vehicle ON maintenance(vehicle_id);
 
 -- ---------- Carburant ----------
+-- NOTE (mise à jour) : "solde" = solde de la carte carburant après ce plein, constaté dans
+-- le suivi manuel actuel du client (fichier IVECO193.xlsx). À confirmer avec le client si
+-- ce solde correspond bien à une carte carburant (montant en DT) ou à autre chose.
 CREATE TABLE fuel_logs (
     id          SERIAL PRIMARY KEY,
     vehicle_id  INTEGER NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
     mission_id  INTEGER REFERENCES missions(id) ON DELETE SET NULL,
     date        DATE NOT NULL DEFAULT CURRENT_DATE,
     litres      NUMERIC(8,2) NOT NULL,
-    cout        NUMERIC(10,2)
+    cout        NUMERIC(10,2),
+    solde       NUMERIC(10,2) -- solde restant sur la carte carburant après ce plein (à valider)
 );
 
 CREATE INDEX idx_fuel_vehicle ON fuel_logs(vehicle_id);
@@ -159,6 +179,37 @@ CREATE TABLE audit_log (
 
 CREATE INDEX idx_audit_user ON audit_log(user_id);
 CREATE INDEX idx_audit_table ON audit_log(table_cible);
+
+-- ============================================================
+-- EN ATTENTE DE VALIDATION CLIENT — Prime journalière chauffeur
+-- Barème identifié dans le suivi Excel actuel du client (IVECO193.xlsx) :
+-- 0-2 missions/jour = 0 DT, 3 = 15 DT, 4 = 35 DT, 5 = 60 DT, 6 = 90 DT.
+-- Ne pas activer cette fonctionnalité côté application tant que le client n'a pas confirmé
+-- qu'il souhaite la digitaliser (cf. message envoyé listant les "ajouts").
+-- ============================================================
+CREATE TABLE bonus_rules (
+    id              SERIAL PRIMARY KEY,
+    nb_missions_min INTEGER NOT NULL,
+    nb_missions_max INTEGER,          -- NULL = pas de plafond
+    montant         NUMERIC(8,2) NOT NULL
+);
+
+CREATE TABLE driver_daily_bonus (
+    id              SERIAL PRIMARY KEY,
+    chauffeur_id    INTEGER NOT NULL REFERENCES users(id),
+    date            DATE NOT NULL,
+    nb_missions     INTEGER NOT NULL,
+    montant         NUMERIC(8,2) NOT NULL,
+    UNIQUE (chauffeur_id, date)
+);
+
+-- Barème de départ observé (à confirmer avant toute utilisation)
+INSERT INTO bonus_rules (nb_missions_min, nb_missions_max, montant) VALUES
+    (0, 2, 0),
+    (3, 3, 15),
+    (4, 4, 35),
+    (5, 5, 60),
+    (6, NULL, 90);
 
 -- ============================================================
 -- Données de départ (rôles de base, à adapter avec les vrais comptes)
